@@ -1,6 +1,6 @@
 # RECmd-Wrapper
 
-A single-file GUI for **Windows registry-hive triage** with Eric Zimmerman's [RECmd](https://github.com/EricZimmerman/RECmd) in batch mode — runs RECmd for you (default batch: `Kroll_Batch.reb`) and turns the output into an interactive, suspicion-scored persistence-triage view. One `.hta`, no install, part of the [DFIR-Artifact-Finder](https://github.com/bpmorris22/DFIR-Artifact-Finder) wrapper family.
+A single-file GUI for **Windows registry-hive triage** with Eric Zimmerman's [RECmd](https://github.com/EricZimmerman/RECmd) in batch mode — runs RECmd for you (default batch: `Kroll_Batch.reb`) and turns the output into an interactive, suspicion-scored persistence-triage view. One `.hta`, no install, part of the [DFIR-Windows-Artifact-Finder](https://github.com/bpmorris22/DFIR-Windows-Artifact-Finder) wrapper family.
 
 ![Control panel](images/control-panel.png)
 
@@ -26,10 +26,10 @@ mshta "RECmd-Wrapper.hta" "<inputOrCsv>" ["<outDir>"] [/auto] [/from:yyyy-MM-dd]
 
 - `<input>` — a `.csv` (auto-loads into the viewer) or a hive file / folder (prefilled; processed with `/auto`).
 - `<outDir>` — CSV output directory (optional; defaults to `_Processed\<host>\RECmd` next to the app).
-- **Target hostname** is required before processing — it names the `_Processed\<host>\RECmd` output folder next to the app (family convention shared with the DFIR-Artifact-Finder, so processed evidence is visible per host per tool). Guessed from `Collection-<host>-…` paths, a passed `_Processed\<host>\` outDir, or this machine's name for live paths — overwrite the guess if it's wrong.
+- **Target hostname** is required before processing — it names the `_Processed\<host>\RECmd` output folder next to the app (family convention shared with the DFIR-Windows-Artifact-Finder, so processed evidence is visible per host per tool). Guessed from `Collection-<host>-…` paths, a passed `_Processed\<host>\` outDir, or this machine's name for live paths — overwrite the guess if it's wrong.
 - **Shared IOC list** — an `IOC.txt` next to the app (one term per line, `#` comments) is auto-merged into the IOC box at launch; one list covers the whole toolkit and terms you paste locally are kept.
-- **Run provenance + triage summary** — every successful run appends a `runinfo.json` entry (app, host, input path, files) in the output folder, including a triage summary (entries, flagged count, max score, top hits); the DFIR-Artifact-Finder shows these per host in its inventory, even for standalone runs.
-- `/from:yyyy-MM-dd` `/to:yyyy-MM-dd` — case window (UTC, inclusive): prefills the date filter and is recorded in `runinfo.json`; never affects scoring. The [DFIR-Artifact-Finder](https://github.com/bpmorris22/DFIR-Artifact-Finder) passes these on every launch.
+- **Run provenance + triage summary** — every successful run appends a `runinfo.json` entry (app, host, input path, files) in the output folder, including a triage summary (entries, flagged count, max score, top hits); the DFIR-Windows-Artifact-Finder shows these per host in its inventory, even for standalone runs.
+- `/from:yyyy-MM-dd` `/to:yyyy-MM-dd` — case window (UTC, inclusive): prefills the date filter and is recorded in `runinfo.json`; never affects scoring. The [DFIR-Windows-Artifact-Finder](https://github.com/bpmorris22/DFIR-Windows-Artifact-Finder) passes these on every launch.
 
 ## Notes
 
