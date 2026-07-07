@@ -2,6 +2,11 @@
 
 A single-file GUI for **Windows registry-hive triage** with Eric Zimmerman's [RECmd](https://github.com/EricZimmerman/RECmd) in batch mode — runs RECmd for you (default batch: `Kroll_Batch.reb`) and turns the output into an interactive, suspicion-scored persistence-triage view. One `.hta`, no install, part of the [DFIR-Artifact-Finder](https://github.com/bpmorris22/DFIR-Artifact-Finder) wrapper family.
 
+![Control panel](images/control-panel.png)
+
+> Control panel — hive/collection input, batch file selection (`Kroll_Batch.reb` default), engine detected,
+> toolkit IOC list merged. Screenshot uses synthetic paths (fake host `ACME-WS01`) — no real case data.
+
 ## Quick start
 
 1. Put `RECmd-Wrapper.hta` anywhere and double-click it — use **Update / download RECmd** to fetch the engine (the whole `RECmd\` folder incl. `Plugins\` and `BatchExamples\` lands next to the app), or point it at an existing copy (KAPE `Modules\bin\RECmd` is found automatically).
