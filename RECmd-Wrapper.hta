@@ -138,7 +138,7 @@
     <input type="file" id="batchPick" style="display:none">
     <button class="btn" id="batchBrowseBtn">Browse&hellip;</button>
     <label class="fld" title="Required before processing. Guessed from the input path (Collection-<host>-… segments, or this machine for live paths) — overwrite it if the guess is wrong.">Target hostname (required) &mdash; names the output folder _Processed\&lt;host&gt;\RECmd next to this app</label>
-    <input class="txt" id="hostName" value="" style="width:260px" placeholder="e.g. LT-2738RQ3">
+    <input class="txt" id="hostName" value="" style="width:260px" placeholder="e.g. WORKSTATION-01">
     <label class="fld">CSV output directory</label>
     <input class="txt wide" id="outDir" value="">
     <button class="btn" id="openDirBtn">Open folder</button>
@@ -230,7 +230,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.2.0";
+var APP_VERSION = "0.2.1";
 var KNOWN_LATEST_RECMD = "2.0.0.0";                                            // baseline as of 2026-07-07
 var RECMD_ZIP_URL = "https://download.ericzimmermanstools.com/RECmd.zip";      // official EZ mirror (net4; family default — folder-shaped tool)
 var RECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
