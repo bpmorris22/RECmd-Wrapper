@@ -231,8 +231,8 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.2.2";
-var KNOWN_LATEST_RECMD = "2.0.0.0";                                            // baseline as of 2026-07-07
+var APP_VERSION = "0.2.3";
+var KNOWN_LATEST_RECMD = "2026.5.0";                                           // EZ site CalVer, verified 2026-07-11 (exe --version still banners SemVer 2.0.0.0)
 var RECMD_ZIP_URL = "https://download.ericzimmermanstools.com/RECmd.zip";      // official EZ mirror (net4; family default — folder-shaped tool)
 var RECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
 var EXE = "";
@@ -243,6 +243,7 @@ var WEB_OK = false;                  // could we reach the Zimmerman Tools site 
 var QUERY = "";
 var MAXROWS = 6000;
 var LASTOUTDIR = "";
+var LOADED_CSV_DIR = "";             // folder of a standalone-loaded CSV, so exports have a home even with no outDir set
 var qTimer = null;
 var MODE = "reg";                    // "reg" = rich registry-findings analysis, "generic" = raw table
 var VIEW = "find";                   // reg mode: "find" = score-ranked findings, "time" = LastWrite timeline, "cat" = grouped categories
@@ -342,6 +343,10 @@ function writeUtf8(path,text){
 function uid(){ return new Date().getTime()+""+Math.floor(Math.random()*100000); }
 /* cmd expands %N / %VAR% inside .bat lines even within quotes — Velociraptor trees contain literal % (C%3A) */
 function batEsc(s){ return String(s).replace(/%/g,"%%"); }
+/* A path ending in a backslash (e.g. a drive root "E:\" from the folder picker) makes the closing
+   quote in  -d "E:\"  an escaped quote to CommandLineToArgvW, mangling argv. Append "." so the
+   argument resolves to the same folder but no longer ends in a backslash. */
+function argSafePath(s){ s=String(s); return /\\$/.test(s) ? (s+".") : s; }
 
 /* Run a batch script, wait, return {rc, log}. show=true → visible console window. */
 function runBat(lines, show){
@@ -449,6 +454,12 @@ function checkDeps(){
 function verTuple(v){ var p=String(v).split("."); var a=[]; for(var i=0;i<p.length;i++) a.push(parseInt(p[i],10)||0); return a; }
 function verCmp(a,b){ a=verTuple(a); b=verTuple(b); var n=Math.max(a.length,b.length);
   for(var i=0;i<n;i++){ var x=a[i]||0,y=b[i]||0; if(x!==y) return x<y?-1:1; } return 0; }
+/* EZ Tools' site lists CalVer versions (e.g. RECmd 2026.5.0) while the exe --version banner still
+   reports SemVer (2.0.0.0). Comparing the two yields a perpetual bogus "update available". Treat an
+   obviously-CalVer latest (major >= 2000) vs an obviously-SemVer local (major in 1..99) as
+   "not comparable" so we neither nag nor claim we're behind. */
+function verSchemeMismatch(local,latest){ var lm=verTuple(local)[0]||0, sm=verTuple(latest)[0]||0;
+  return sm>=2000 && lm>=1 && lm<100; }
 function fetchLatest(){
   LATEST_VER=KNOWN_LATEST_RECMD; WEB_OK=false;
   try{
@@ -463,7 +474,8 @@ function updateVerPill(){
   var s=LOCAL_VER?("RECmd v"+esc(LOCAL_VER)):"RECmd: not found";
   if(!WEB_OK){ s+=" &middot; <span style='color:#8b949e'>no internet / no web source</span>"; }
   else if(LATEST_VER){
-    if(LOCAL_VER && verCmp(LOCAL_VER,LATEST_VER)<0) s+=" &middot; <span style='color:#d29922'>update v"+esc(LATEST_VER)+" available</span>";
+    if(LOCAL_VER && verSchemeMismatch(LOCAL_VER,LATEST_VER)) s+=" &middot; <span style='color:#8b949e'>installed (site lists v"+esc(LATEST_VER)+"; version schemes differ)</span>";
+    else if(LOCAL_VER && verCmp(LOCAL_VER,LATEST_VER)<0) s+=" &middot; <span style='color:#d29922'>update v"+esc(LATEST_VER)+" available</span>";
     else if(LOCAL_VER) s+=" &middot; <span style='color:#3fb950'>latest</span>";
     else s+=" &middot; latest v"+esc(LATEST_VER);
   }
@@ -481,7 +493,7 @@ function evaluateTooling(promptIfNeeded){
   if(!promptIfNeeded) return;
   if(localComplete){
     // tool already next to the .hta → only prompt when the web says a newer version exists
-    if(WEB_OK && LOCAL_VER && verCmp(LOCAL_VER,LATEST_VER)<0){
+    if(WEB_OK && LOCAL_VER && !verSchemeMismatch(LOCAL_VER,LATEST_VER) && verCmp(LOCAL_VER,LATEST_VER)<0){
       if(confirm("A newer RECmd is available.\n\nNext to this app: v"+LOCAL_VER+"\nLatest online:   v"+LATEST_VER+"\n\nDownload the update next to the app now?")) downloadLatest();
     }
   } else {
@@ -616,7 +628,7 @@ function writeRunInfo(outdir, input, freshFiles){
     var arr=[];
     try{ if(fileExists(p)){ var old=JSON.parse(readUtf8(p)); if(old && old.length!=null) arr=old; } }catch(e0){}
     var d=new Date(); function p2(x){ return (x<10?"0":"")+x; }
-    var iso=d.getFullYear()+"-"+p2(d.getMonth()+1)+"-"+p2(d.getDate())+"T"+p2(d.getHours())+":"+p2(d.getMinutes())+":"+p2(d.getSeconds());
+    var iso=d.getUTCFullYear()+"-"+p2(d.getUTCMonth()+1)+"-"+p2(d.getUTCDate())+"T"+p2(d.getUTCHours())+":"+p2(d.getUTCMinutes())+":"+p2(d.getUTCSeconds())+"Z";
     var names=[]; for(var i=0;i<freshFiles.length && i<50;i++) names.push(freshFiles[i].name||String(freshFiles[i]));
     var ent={app:APP_NAME, appVersion:APP_VERSION, host:sanitHost($("hostName").value),
               input:String(input||""), finishedUtc:iso, files:names};
@@ -682,7 +694,7 @@ function processPf(nl){
   appendLog("Running: \""+EXE+"\" --bn \""+batch+"\" "+flag+" \""+inp+"\" --csv \""+outdir+"\""+extra
     +"\nA console window shows progress; the app stays responsive and loads results automatically when done.");
   BUSY=true; $("procBtn").disabled=true;
-  var binp=batEsc(inp), bout=batEsc(outdir), bbn=batEsc(batch);
+  var binp=batEsc(argSafePath(inp)), bout=batEsc(argSafePath(outdir)), bbn=batEsc(argSafePath(batch));
   var ctx=runBatAsync([
     "set DOTNET_ROLL_FORWARD=Major",
     'if not exist "'+bout+'" mkdir "'+bout+'"',
@@ -801,6 +813,7 @@ function parseCSV(text){
 
 /* ---------- ingest dispatch ---------- */
 function loadCsvFile(path){
+  LOADED_CSV_DIR=parentDir(path);
   try{
     var text=readUtf8(path);
     var raw=parseCSV(text);
@@ -1415,7 +1428,8 @@ function exportView(){
     lines.push([cq(r.name),cq(r.cat),cq(r.desc),cq(r.keyPath),cq(r.valueName),cq(r.valueType),cq(r.vd),cq(r.vd2),cq(r.vd3),
       cq(r.comment),cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),cq(r.recursive?"True":"False"),
       cq(r.deleted?"True":"False"),cq(r.lastWrite),cq(r.hive),cq(r.hiveType),cq(r.plugin)].join(",")); }
-  var dir=LASTOUTDIR||$("outDir").value;
+  var dir=LASTOUTDIR||trimStr($("outDir").value)||LOADED_CSV_DIR;
+  if(!dir){ setStatus("No output folder to write to — set an output directory, process a hive, or load a CSV first.","err"); return; }
   var path=dir+"\\"+((VIEW==="time")?"timeline_export_":"filtered_export_")+nowStamp()+".csv";
   try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(rows.length)+" rows → "+path,"ok"); appendLog("Exported: "+path); }
   catch(e){ setStatus("Export failed: "+e.message,"err"); }
@@ -1427,7 +1441,8 @@ function exportCats(){
   var lines=[head.join(",")];
   for(var i=0;i<groups.length;i++){ var g=groups[i];
     lines.push([cq(g.cat),cq(g.desc),cq(g.n),cq(g.sus),cq(g.maxScore),cq(g.newest)].join(",")); }
-  var dir=LASTOUTDIR||$("outDir").value;
+  var dir=LASTOUTDIR||trimStr($("outDir").value)||LOADED_CSV_DIR;
+  if(!dir){ setStatus("No output folder to write to — set an output directory, process a hive, or load a CSV first.","err"); return; }
   var path=dir+"\\categories_export_"+nowStamp()+".csv";
   try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(groups.length)+" groups → "+path,"ok"); appendLog("Exported: "+path); }
   catch(e){ setStatus("Export failed: "+e.message,"err"); }
@@ -1437,7 +1452,8 @@ function exportGeneric(){
   if(!GHEAD||!rows.length){ setStatus("Nothing to export","err"); return; }
   var lines=[]; var hd=[]; for(var c=0;c<GHEAD.length;c++) hd.push(cq(GHEAD[c])); lines.push(hd.join(","));
   for(var i=0;i<rows.length;i++){ var rw=rows[i]; var cells=[]; for(var c2=0;c2<GHEAD.length;c2++) cells.push(cq(c2<rw.length?rw[c2]:"")); lines.push(cells.join(",")); }
-  var dir=LASTOUTDIR||$("outDir").value;
+  var dir=LASTOUTDIR||trimStr($("outDir").value)||LOADED_CSV_DIR;
+  if(!dir){ setStatus("No output folder to write to — set an output directory, process a hive, or load a CSV first.","err"); return; }
   var path=dir+"\\filtered_export_"+nowStamp()+".csv";
   try{ writeUtf8(path, lines.join("\r\n")); setStatus("Exported "+nf(rows.length)+" rows → "+path,"ok"); appendLog("Exported: "+path); }
   catch(e){ setStatus("Export failed: "+e.message,"err"); }
