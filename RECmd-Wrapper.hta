@@ -75,6 +75,9 @@
   table{width:100%;border-collapse:collapse;font-size:12px}
   th,td{text-align:left;padding:4px 7px;border-bottom:1px solid #30363d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   th{background:#1c2330;cursor:pointer;color:#c9d1d9;position:relative;z-index:3;box-shadow:0 1px 0 #30363d}
+  th .sarr{font-size:9px;color:#6e7681;margin-left:4px;white-space:nowrap;font-weight:400}   /* sort toggle on every heading */
+  th .sarr.on{font-size:11px;color:#58a6ff}
+  th:hover .sarr{color:#c9d1d9}
   th:hover{color:#58a6ff}
   .cgrip{position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:col-resize;z-index:6}
   .cgrip:hover{background:#58a6ff;filter:alpha(opacity=45);opacity:.45}
@@ -210,7 +213,7 @@
           <span class="muted">&rarr;</span>
           <input class="txt mono" id="dto" placeholder="to YYYY-MM-DD" style="width:140px" title="Filter by key LastWriteTimestamp (UTC)">
           <span class="sep"></span>
-          <label class="muted" style="font-size:12px;cursor:pointer" title="Hide rows whose run count is 0 or blank - a ValueData / ValueData2 / ValueData3 cell reading &quot;Run count: 0&quot; or just &quot;Run count:&quot; (UserAssist and other execution plugins). Rows that carry no run count at all are kept."><input type="checkbox" id="zeroRun" style="vertical-align:middle"> hide 0 / blank run count <span id="zeroRunN"></span></label>
+          <label class="muted" style="font-size:12px;cursor:pointer" title="Show only rows whose Run count column is 1 or more. Hides &quot;Run count: 0&quot;, a blank &quot;Run count:&quot;, and every row with no run count at all (Taskband, MountPoints2, Run keys...) - the table becomes an execution-evidence view."><input type="checkbox" id="zeroRun" style="vertical-align:middle"> hide 0 / blank run count <span id="zeroRunN"></span></label>
         </span>
         <span class="sep"></span>
         <button class="btn" id="iocBtn">IOC / keywords&hellip;</button>
@@ -242,7 +245,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.5.1";
+var APP_VERSION = "0.5.2";
 var KNOWN_LATEST_RECMD = "2026.5.0";                                           // EZ site CalVer, verified 2026-07-11 (exe --version still banners SemVer 2.0.0.0)
 var RECMD_ZIP_URL = "https://download.ericzimmermanstools.com/RECmd.zip";      // official EZ mirror (net4; family default — folder-shaped tool)
 var RECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
@@ -282,8 +285,7 @@ var GSORTKEY = -1, GSORTDIR = 1;
 var GSRCIDX = -1;                    // generic mode: index of the SourceFile(name) column
 var SRCFILTER = "";                  // selected source-file filter (generic mode)
 var USERFILTER = "";                 // selected user filter (reg mode) — userDisp from HivePath, or "(machine hives)" ("" = all)
-var HIDEZERORUN = false;             // reg mode: drop rows whose "Run count:" cell is 0 or blank (rows with no run count stay)
-var ZERORUN_RE = /^\s*run\s*count\s*:\s*0*\s*$/i;
+var HIDEZERORUN = false;             // reg mode: keep only rows whose Run count column is >= 1 (0, blank and no run count are hidden)
 var RUNCNT_RE = /^\s*run\s*count\s*:\s*(\d*)\s*$/i;
 /* the "Run count: N" cell (UserAssist & co. put it in ValueData3) as a number; "" when the cell is blank,
    null when the row carries no run count at all */
@@ -1003,8 +1005,8 @@ function ingestPf(raw, idx, srcLabel){
     rec.keyL=kp.toLowerCase(); rec.vnL=String(vn).toLowerCase();
     rec.vdAllL=(String(vd)+" "+String(vd2)+" "+String(vd3)).toLowerCase();
     rec.userDisp=userFromHive(rec.hive);   // owning user (NTUSER/UsrClass) or "(machine hives)"
-    rec.zeroRun=ZERORUN_RE.test(String(vd))||ZERORUN_RE.test(String(vd2))||ZERORUN_RE.test(String(vd3));   // "Run count: 0" / "Run count:" (blank)
     rec.runCnt=runCountOf(vd,vd2,vd3);   // number, "" (blank) or null (no run count) - shown in the Run count column
+    rec.zeroRun=!(typeof rec.runCnt==="number" && rec.runCnt>0);   // Run count column 0 or empty (incl. rows with no run count)
     rec.blob=(rec.name+" "+kp+" "+vn+" "+vd+" "+vd2+" "+vd3+" "+rec.hive+" "+rec.hiveType+" "+rec.cat+" "+desc+" "+rec.comment).toLowerCase();
     if(rec.hive) hives[rec.hive.toLowerCase()]=1;
     ROWS.push(rec);
@@ -1134,6 +1136,10 @@ function msToTs(ms){ var d=new Date(ms); function p(x){return (x<10?"0":"")+x;}
 function hasTag(r,t){ for(var i=0;i<r.tags.length;i++){ if(r.tags[i]===t) return true; } return false; }
 
 /* ---------- findings table ---------- */
+/* a sortable heading: dim up/down arrows on every column, one bright arrow (direction) on the active one */
+function sortTh(k,label,active,dir){
+  return '<th data-k="'+k+'" title="Sort by '+esc(label)+' - click again to reverse">'+esc(label)
+    +'<span class="sarr'+(active?' on':'')+'">'+(active?(dir>0?"▲":"▼"):"▲▼")+'</span></th>'; }
 function clip(s,n){ s=String(s==null?"":s); return s.length>n?(s.substring(0,n)+"…"):s; }
 /* shared column builders - Findings and Timeline order them differently */
 var COL_USER={h:"User", sk:function(r){return String(r.userDisp).toLowerCase();}, cell:function(r){return '<td class="mono muted lnk" data-user="'+esc(r.userDisp)+'" title="Hive owner (from HivePath) — click to filter. '+esc(r.userDisp)+'">'+esc(r.userDisp)+'</td>';}};
@@ -1217,8 +1223,7 @@ function render(){
   var shown=rows.length>MAXROWS?MAXROWS:rows.length;
   var html="<thead><tr>";
   for(var c=0;c<COLS.length;c++){
-    var arrow=(SORTKEY===c)?(SORTDIR>0?" ▲":" ▼"):"";
-    html+='<th data-k="'+c+'">'+esc(COLS[c].h)+arrow+'</th>';
+    html+=sortTh(c,COLS[c].h,SORTKEY===c,SORTDIR);
   }
   html+="</tr></thead><tbody>";
   for(var i=0;i<shown;i++){
@@ -1363,8 +1368,7 @@ function renderTime(){
   var shown=rows.length>MAXROWS?MAXROWS:rows.length;
   var html="<thead><tr>";
   for(var c=0;c<TCOLS.length;c++){
-    var arrow=(TSORTKEY===c)?(TSORTDIR>0?" ▲":" ▼"):"";
-    html+='<th data-k="'+c+'">'+esc(TCOLS[c].h)+arrow+'</th>';
+    html+=sortTh(c,TCOLS[c].h,TSORTKEY===c,TSORTDIR);
   }
   html+="</tr></thead><tbody>";
   for(var i=0;i<shown;i++){
@@ -1423,8 +1427,7 @@ function renderCats(){
     x=String(x); y=String(y); return x<y?-dir:(x>y?dir:0); });
   var html="<thead><tr>";
   for(var c=0;c<CCOLS.length;c++){
-    var arrow=(CSORTKEY===c)?(CSORTDIR>0?" ▲":" ▼"):"";
-    html+='<th data-k="'+c+'">'+esc(CCOLS[c].h)+arrow+'</th>';
+    html+=sortTh(c,CCOLS[c].h,CSORTKEY===c,CSORTDIR);
   }
   html+="</tr></thead><tbody>";
   for(var i=0;i<groups.length;i++){
@@ -1544,7 +1547,7 @@ function renderGeneric(){
     '<span class="stat" style="min-width:240px"><span class="n" style="font-size:12px">'+esc(GSRC)+'</span><span class="l">source</span></span>';
   var shown=rows.length>MAXROWS?MAXROWS:rows.length;
   var h="<thead><tr>";
-  for(var c=0;c<GHEAD.length;c++){ var ar=(GSORTKEY===c)?(GSORTDIR>0?" ▲":" ▼"):""; h+='<th data-k="'+c+'">'+esc(GHEAD[c])+ar+'</th>'; }
+  for(var c=0;c<GHEAD.length;c++){ h+=sortTh(c,GHEAD[c],GSORTKEY===c,GSORTDIR); }
   h+="</tr></thead><tbody>";
   for(var r=0;r<shown;r++){ var row=rows[r]; h+="<tr>";
     for(var c2=0;c2<GHEAD.length;c2++){ var v=(c2<row.length?row[c2]:""); h+='<td class="mono" title="'+esc(v)+'">'+esc(v)+'</td>'; }
@@ -1960,7 +1963,8 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
       <li>Three views: <b>Findings</b> (one row per matched key/value, score-ranked), <b>Timeline</b> (same rows by key LastWriteTimestamp) and <b>Categories</b> (grouped per Category → Description with counts and max score — click a group to drill in).</li>
       <li><b>User filter</b>: the <code>user:</code> dropdown (or clicking a User cell) filters every view by the hive's <b>owning user</b>, parsed from <code>HivePath</code>. <code>NTUSER.DAT</code> / <code>UsrClass.dat</code> live under <code>…\Users\&lt;name&gt;\</code> and map to that account; the machine-wide hives (<code>SYSTEM</code>, <code>SOFTWARE</code>, <code>SAM</code>, <code>SECURITY</code>) have no user and group under <code>(machine hives)</code>. It appears only when at least one user hive is present. Two caveats: (1) this is by hive <b>origin</b> — a <code>SAM</code> finding <i>describes</i> user accounts but its hive is machine-level, so it reads as <code>(machine hives)</code>, not per-account; (2) in a multi-host recursive collection the same username across hosts collapses into one entry (there's no host column in registry mode) — disambiguate by source path if needed.</li>
       <li><b>Run count</b> column (Findings and Timeline, right of ValueData): the number from a row's <code>Run count: N</code> cell, sortable; empty when the row has no run count. Exports carry it as <code>RunCount</code>.</li>
-      <li><b>Hide 0 / blank run count</b>: the checkbox next to the date filter drops rows where a <code>ValueData</code> / <code>ValueData2</code> / <code>ValueData3</code> cell reads <code>Run count: 0</code> or a bare <code>Run count:</code> (UserAssist and similar execution plugins) from every view and from exports. Rows with no run count at all (Taskband, Run keys, services&hellip;) are never hidden. A zero count is not proof a program never ran, so leave it off when hunting for single executions.</li>
+      <li><b>Hide 0 / blank run count</b>: the checkbox next to the date filter keeps only rows whose <b>Run count</b> column holds a number of 1 or more. Everything else is hidden from every view and from exports: <code>Run count: 0</code>, a bare <code>Run count:</code>, and rows with no run count at all (Taskband, MountPoints2, Run keys, services&hellip;). Ticked, the table becomes an execution-evidence view. A zero count is not proof a program never ran, so leave it off when hunting for single executions.</li>
+      <li><b>Sorting</b>: every column heading is a sort toggle (&#9650;&#9660;). Click once to sort by that column, click again to reverse; the active column shows &#9650; (ascending) or &#9660; (descending).</li>
       <li>Suspicion scoring R1–R7 (IOC hit, autorun→user-writable path, LOLBin invocation, hijack-prone key, deleted, base64 blob, remote autorun) — rows with score &ge; 3 are shaded. The detail pane shows every column incl. ValueData2/3, Comment and the per-plugin detail CSV path.</li>
       <li>Columns are resizable &mdash; drag a header's right edge; double-click the edge to reset. Widths are remembered per view.</li>
       <li>All timestamps are UTC. The main batch CSV lands in the output root; per-plugin detail CSVs land in a timestamped subfolder.</li>
