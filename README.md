@@ -16,6 +16,7 @@ A single-file GUI for **Windows registry-hive triage** with Eric Zimmerman's [RE
 ## Views & scoring
 
 - **Findings** (default), **Timeline** (by key last-write), and **Categories** (grouped per batch category) — sortable, filterable, resizable columns, detail pane, CSV export.
+- **Hide 0 / blank run count** — a checkbox beside the date filter drops rows whose `Run count:` cell (UserAssist and similar execution plugins) is `0` or blank, in every view and in exports. Rows without a run count (Run keys, Taskband, services, …) are never hidden.
 - Suspicion scoring **R1–R7**: IOC/keyword hits, autoruns/services pointing at user-writable paths, LOLBin/script invocations, hijack-prone locations (IFEO, AppInit_DLLs, netsh helpers, LSA packages, …), deleted entries, base64-looking blobs, remote paths in autoruns. Threshold is deliberately conservative — registry batch output is noisy by design.
 
 ## Command line

@@ -45,6 +45,8 @@
   header h1{display:inline-block;font-size:15px;margin:0;font-weight:600;vertical-align:middle}
   header h1 small{color:#8b949e;font-weight:400}
   .pill{display:inline-block;font-size:11px;color:#8b949e;border:1px solid #30363d;border-radius:20px;padding:2px 10px;margin-left:8px;vertical-align:middle}
+  .pill.run{color:#ff8b3d;border-color:#bd561d}     /* orange: a run is in progress */
+  .pill.err{color:#ff8b8b;border-color:#b02020}     /* red: the run timed out / produced nothing */
   .pill.ok{color:#7ee787;border-color:#2ea043}
   .pill.bad{color:#ff8b3d;border-color:#bd561d}
   .wrap{padding:12px 14px}
@@ -116,6 +118,7 @@
   <span class="pill" id="verpill" title="RECmd.exe version">RECmd: checking&hellip;</span>
   <span class="pill" id="srcpill">no data loaded</span>
   <span style="float:right">
+    <span class="pill" id="procTimer" title="Processing time. Starts when a run begins and stops when it finishes, so you can see how long the artifact actually took to parse. The app is single-threaded, so the counter can pause during a heavy step (a multi-GB parse, a hive replay) and then jump forward - that is the step blocking, not a stall." style="min-width:150px;text-align:center;display:inline-block">Idle</span>
     <button class="btn" id="instrBtn" onclick="openInstructions()" title="Download the latest HTML field guide from GitHub and open it in your browser">Instructions</button>
     <button class="btn" id="helpBtn" onclick="openHelp()" title="Help, about &amp; GitHub link">Help</button>
     <button class="btn primary hide" id="selfUpd" onclick="doSelfUpdate()" title="A newer version is available on GitHub">Update</button>
@@ -206,6 +209,8 @@
           <input class="txt mono" id="dfrom" placeholder="from YYYY-MM-DD" style="width:140px" title="Filter by key LastWriteTimestamp (UTC)">
           <span class="muted">&rarr;</span>
           <input class="txt mono" id="dto" placeholder="to YYYY-MM-DD" style="width:140px" title="Filter by key LastWriteTimestamp (UTC)">
+          <span class="sep"></span>
+          <label class="muted" style="font-size:12px;cursor:pointer" title="Hide rows whose run count is 0 or blank - a ValueData / ValueData2 / ValueData3 cell reading &quot;Run count: 0&quot; or just &quot;Run count:&quot; (UserAssist and other execution plugins). Rows that carry no run count at all are kept."><input type="checkbox" id="zeroRun" style="vertical-align:middle"> hide 0 / blank run count <span id="zeroRunN"></span></label>
         </span>
         <span class="sep"></span>
         <button class="btn" id="iocBtn">IOC / keywords&hellip;</button>
@@ -237,7 +242,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.4.2";
+var APP_VERSION = "0.5.0";
 var KNOWN_LATEST_RECMD = "2026.5.0";                                           // EZ site CalVer, verified 2026-07-11 (exe --version still banners SemVer 2.0.0.0)
 var RECMD_ZIP_URL = "https://download.ericzimmermanstools.com/RECmd.zip";      // official EZ mirror (net4; family default — folder-shaped tool)
 var RECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
@@ -277,6 +282,8 @@ var GSORTKEY = -1, GSORTDIR = 1;
 var GSRCIDX = -1;                    // generic mode: index of the SourceFile(name) column
 var SRCFILTER = "";                  // selected source-file filter (generic mode)
 var USERFILTER = "";                 // selected user filter (reg mode) — userDisp from HivePath, or "(machine hives)" ("" = all)
+var HIDEZERORUN = false;             // reg mode: drop rows whose "Run count:" cell is 0 or blank (rows with no run count stay)
+var ZERORUN_RE = /^\s*run\s*count\s*:\s*0*\s*$/i;
 var BUSY = false;                    // a RECmd run is in progress
 var PRODUCED = [];                   // CSVs produced by the last run
 var BATCH_TOUCHED = false;           // operator edited the batch-file box — stop auto-filling it
@@ -386,6 +393,34 @@ function runBat(lines, show){
   return { rc:rc, log:txt };
 }
 
+/* ---------- processing-time pill (ported from vSphere Support Bundle Analyzer) ----------
+   A long parse used to read as a hang: the status line ticks, but nothing said how long the run had
+   taken or how long the previous one took. #procTimer lives in the header and holds three states -
+   Idle, an orange live counter while the tool runs, and a final green "Processing time mm:ss" (red
+   if the watchdog gave up waiting). The HTA is single-threaded, so the counter can freeze during a
+   blocking step and then jump; the pill tooltip says so rather than letting it look broken. */
+var PROC_T0=0, PROC_TIMER=null, PROC_WHAT="Processing";
+function procFmt(s){ var m=Math.floor(s/60), ss=s%60; return (m<10?"0":"")+m+":"+(ss<10?"0":"")+ss; }
+function procStart(what){
+  PROC_WHAT=what||"Processing";
+  PROC_T0=(new Date()).getTime();
+  if(PROC_TIMER) window.clearInterval(PROC_TIMER);
+  PROC_TIMER=window.setInterval(procTick,500);
+  var el=$("procTimer"); if(el){ el.className="pill run"; el.innerHTML=PROC_WHAT+" 00:00"; }
+}
+function procTick(){ if(!PROC_T0) return; var el=$("procTimer"); if(!el) return;
+  el.innerHTML=PROC_WHAT+" "+procFmt(Math.floor(((new Date()).getTime()-PROC_T0)/1000)); }
+function procStop(ok){
+  if(PROC_TIMER){ window.clearInterval(PROC_TIMER); PROC_TIMER=null; }
+  if(!PROC_T0) return;
+  var s=Math.floor(((new Date()).getTime()-PROC_T0)/1000), el=$("procTimer");
+  if(el){ el.className=(ok===false?"pill err":"pill ok"); el.innerHTML="Processing time "+procFmt(s); }
+  PROC_T0=0;
+}
+/* the run finished but produced nothing usable - recolour the stopped pill so the header agrees
+   with the error in the status line instead of showing a reassuring green time. */
+function procFail(){ var el=$("procTimer"); if(el && !PROC_T0) el.className="pill err"; }
+
 /* Run a batch NON-blocking; writes a .done marker when finished. Caller polls with pollDone().
    This keeps the HTA script responsive (no MSHTML long-running-script watchdog). */
 function runBatAsync(lines, show){
@@ -421,11 +456,12 @@ function pollDone(ctx){
     try{ fso.DeleteFile(ctx.bat); }catch(e1){}
     try{ fso.DeleteFile(ctx.done); }catch(e2){}
     try{ if(fso.FileExists(ctx.log)) fso.DeleteFile(ctx.log); }catch(e3){}
+    if(ctx.procTimed) procStop(true);
     ctx.onDone(log);
     return;
   }
   ctx.elapsed+=1;
-  if(ctx.elapsed>1800){ ctx.onTimeout&&ctx.onTimeout(); return; }   // 30-min safety cap
+  if(ctx.elapsed>1800){ if(ctx.procTimed) procStop(false); ctx.onTimeout&&ctx.onTimeout(); return; }   // 30-min safety cap
   if(ctx.onTick) ctx.onTick(ctx.elapsed);
   window.setTimeout(function(){ pollDone(ctx); }, 1000);
 }
@@ -445,7 +481,14 @@ function populateSourceFilter(vals){
 /* the owning user of a hive: the \Users\<name>\ segment of HivePath (NTUSER.DAT / UsrClass.dat).
    Machine-wide hives (SYSTEM/SOFTWARE/SAM/SECURITY) sit in \Windows\System32\config with no user →
    they bucket under "(machine hives)". Filtering by ORIGIN, not by any account a finding describes. */
-function userFromHive(hive){ if(!hive) return "(machine hives)"; var m=String(hive).match(/[\\\/]users[\\\/]([^\\\/]+)/i); return m?m[1]:"(machine hives)"; }
+/* The LAST \Users\<name>\ segment wins: a collection opened from the analyst's own profile
+   (C:\Users\<analyst>\Documents\Collection-…\uploads\auto\C%3A\Users\<suspect>\NTUSER.DAT) has two, and
+   the first is the examiner, not the evidence. Velociraptor %-encodes path components, so decode the name. */
+function userFromHive(hive){ if(!hive) return "(machine hives)";
+  var re=/[\\\/]users[\\\/]([^\\\/]+)[\\\/]/ig, m, u="";
+  while((m=re.exec(String(hive)))){ u=m[1]; re.lastIndex=m.index+1; }
+  try{ u=decodeURIComponent(u); }catch(e){}
+  return u||"(machine hives)"; }
 function populateUserFilter(vals){
   var sel=$("userSel"); if(!sel) return;
   var prev=USERFILTER, found=false;
@@ -461,6 +504,31 @@ function populateUserFilter(vals){
 /* ---------- tooling: locate / version / download ---------- */
 function fileExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FileExists(p); }catch(e){ return false; } }
 function folderExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FolderExists(p); }catch(e){ return false; } }
+/* ---------- long paths (MAX_PATH, family 2026-10-03) ----------
+   mshta is not long-path aware: plain FSO FileExists / FolderExists / GetFolder report a path of 260+ characters
+   as missing even when it exists (VERIFIED 2026-10-03, Win11 + LongPathsEnabled=1: 259 chars seen, 260 not), and
+   Velociraptor / KAPE collection paths routinely exceed that. The same FSO calls DO see such a path through its
+   \\?\ extended-length form, so a long path is re-checked that way (lpKind). An operator-given input that even the
+   \\?\ form cannot see is still trusted: a note is logged and the long-path-aware engine reports a genuine miss -
+   an FSO miss on a long path is never treated as authoritative. */
+var MAXP=259;
+function isLongPath(p){ return String(p||"").length>MAXP; }
+function lpForm(p){ p=String(p||"").replace(/\//g,"\\");
+  if(/^[A-Za-z]:\\/.test(p)) return "\\\\?\\"+p;
+  if(/^\\\\[^\\?.]/.test(p)) return "\\\\?\\UNC\\"+p.substring(2);
+  return ""; }
+function lpKind(p){ var q=lpForm(p); if(!q) return "";   // "f" file / "d" folder / "" not seen, through the \\?\ form
+  try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); if(fso.FileExists(q)) return "f"; if(fso.FolderExists(q)) return "d"; }catch(e){}
+  return ""; }
+function inputSeen(p, wantDir, what){
+  if(wantDir ? folderExists(p) : fileExists(p)) return true;
+  if(!isLongPath(p)) return false;
+  var k=lpKind(p);
+  if(k && k!==(wantDir?"d":"f")) return false;   // it exists, but as the other kind
+  appendLog("Note: the "+what+" path is "+String(p).length+" characters (over MAX_PATH) - "+(k
+    ? "verified through its \\\\?\\ extended-length form."
+    : "this app cannot verify it; the engine reads it and reports it if it is really missing: "+p));
+  return true; }
 function parentDir(p){ var i=String(p).lastIndexOf("\\"); return i>=0?p.substring(0,i):p; }
 function htaFolder(){
   try{ var cl=recmdHta.commandLine+""; var m=cl.match(/"([^"]+\.hta)"/i); if(!m) m=cl.match(/([A-Za-z]:\\[^"]+\.hta)/i);
@@ -616,8 +684,11 @@ function checkVersion(){
 
 /* can we actually enumerate this folder? (permission sanity-check before handing it to RECmd) */
 function canListFolder(p){
-  try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
-    var e=new Enumerator(fso.GetFolder(p).Files); e.atEnd(); return true; }catch(err){ return false; }
+  var c=[p], q=lpForm(p), i;
+  if(q) c.push(q);   // the \\?\ form also reaches a folder near / over MAX_PATH
+  for(i=0;i<c.length;i++){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
+    var e=new Enumerator(fso.GetFolder(c[i]).Files); e.atEnd(); return true; }catch(err){} }
+  return isLongPath(p) && !lpKind(p);   // a long path this app cannot see at all: the engine reports a real access problem
 }
 
 /* ---------- target hostname + _Processed output convention (family, 2026-07-06) ----------
@@ -738,10 +809,10 @@ function processPf(nl){
   var batch=trimStr($("batchPath").value);
   var fso=new ActiveXObject("Scripting.FileSystemObject");
   if(inmode==="d"){
-    if(!inp||!fso.FolderExists(inp)){ setStatus("Directory not found: "+inp,"err"); return; }
+    if(!inp||!inputSeen(inp,true,"input folder")){ setStatus("Directory not found: "+inp,"err"); return; }
     if(!canListFolder(inp)){ setStatus("Access denied reading "+inp+" — check permissions (live config hives are exclusively locked; point at a collected copy).","err"); return; }
   }
-  else { if(!inp||!fso.FileExists(inp)){ setStatus("File not found: "+inp,"err"); return; } }
+  else { if(!inp||!inputSeen(inp,false,"input file")){ setStatus("File not found: "+inp,"err"); return; } }
   if(!outdir){ setStatus("Set an output directory","err"); return; }
   if(!EXE||!fileExists(EXE)){ setStatus("RECmd.exe not found — download it first","err"); return; }
   if(!batch){ setStatus("Set a batch file (.reb) — it defines which keys/values RECmd sweeps. Kroll_Batch.reb ships in the RECmd BatchExamples folder.","err"); return; }
@@ -766,6 +837,7 @@ function processPf(nl){
     "echo.",
     '"'+batEsc(EXE)+'" --bn "'+bbn+'" '+flag+' "'+binp+'" --csv "'+bout+'"'+extra+' > "__LOG__" 2>&1'
   ], true);
+  ctx.procTimed=true; procStart("Processing");
   ctx.onTick=function(s){ setStatus("RECmd running…"+(nl?" (--nl retry)":"")+" "+s+"s elapsed (app responsive; results load when done)","muted"); };
   ctx.onTimeout=function(){ BUSY=false; $("procBtn").disabled=false; setStatus("RECmd still running after 30 min — stopped watching. Check the output folder / console window.","err"); };
   ctx.onDone=function(log){ BUSY=false; $("procBtn").disabled=false; processPfDone(log,outdir,before,!!nl); };
@@ -784,7 +856,8 @@ function processPfDone(log,outdir,before,wasNl){
   LASTOUTDIR=outdir;
   var all=listCsvFiles(outdir);
   var fresh=[]; for(var i=0;i<all.length;i++){ if(!before[all[i].name]) fresh.push(all[i]); }
-  if(!fresh.length){
+  /* completed but produced no new CSV - recolour the header pill so it does not read as a clean run */
+  if(!fresh.length){ procFail();
     if(!wasNl && looksDirtyAbort(log)){
       // dirty hive, no transaction logs beside it → retry once with --nl (no log replay)
       DIRTY_NOTE=" (dirty hive — processed without log replay)";
@@ -924,6 +997,7 @@ function ingestPf(raw, idx, srcLabel){
     rec.keyL=kp.toLowerCase(); rec.vnL=String(vn).toLowerCase();
     rec.vdAllL=(String(vd)+" "+String(vd2)+" "+String(vd3)).toLowerCase();
     rec.userDisp=userFromHive(rec.hive);   // owning user (NTUSER/UsrClass) or "(machine hives)"
+    rec.zeroRun=ZERORUN_RE.test(String(vd))||ZERORUN_RE.test(String(vd2))||ZERORUN_RE.test(String(vd3));   // "Run count: 0" / "Run count:" (blank)
     rec.blob=(rec.name+" "+kp+" "+vn+" "+vd+" "+vd2+" "+vd3+" "+rec.hive+" "+rec.hiveType+" "+rec.cat+" "+desc+" "+rec.comment).toLowerCase();
     if(rec.hive) hives[rec.hive.toLowerCase()]=1;
     ROWS.push(rec);
@@ -936,6 +1010,8 @@ function ingestPf(raw, idx, srcLabel){
   USERFILTER="";
   var uvals=[]; for(var uu=0;uu<ROWS.length;uu++) uvals.push(ROWS[uu].userDisp);
   populateUserFilter(distinctVals(uvals));
+  var zr=0; for(var zz=0;zz<ROWS.length;zz++){ if(ROWS[zz].zeroRun) zr++; }
+  $("zeroRunN").innerHTML="("+nf(zr)+")";
   $("results").className="";
   $("srcpill").innerHTML=nf(ROWS.length)+" key/value findings &middot; "+nf(hiveN)+" hive(s) &middot; "+esc(srcLabel);
   QUERY=""; $("q").value=""; DFROM=CASE_FROM?dayNum(CASE_FROM):0; DTO=CASE_TO?dayNum(CASE_TO):0; $("dfrom").value=CASE_FROM||""; $("dto").value=CASE_TO||"";
@@ -1077,6 +1153,7 @@ function filteredPf(){
   for(var i=0;i<ROWS.length;i++){
     var r=ROWS[i];
     if(USERFILTER && r.userDisp!==USERFILTER) continue;
+    if(HIDEZERORUN && r.zeroRun) continue;
     if(CURCAT==="sus"&&!r.sus) continue;
     if(CURCAT==="ioc"&&!hasTag(r,"IOC")) continue;
     if(CURCAT==="autorun"&&!hasTag(r,"AUTORUN-USERPATH")) continue;
@@ -1582,9 +1659,27 @@ function init(){
 
   var zoom=0.9;
   var zContent=$("content");
-  function applyZoom(){ zContent.style.zoom=zoom; zContent.style.width=(100/zoom)+"%"; var p=Math.round(zoom*100)+"%";
+  /* A+ / A- text scaling. <header> and the modal cards live OUTSIDE #content, so zooming #content
+     alone left the app's top row - and the Help dialog - at a fixed size while everything else grew
+     or shrank. Each block is zoomed and then widened by 1/zoom, because a zoom<1 shrinks a 100%-wide
+     block to less than the viewport and leaves a blank gutter down the right edge. For the modals the
+     CARD is scaled and not the fixed overlay, so the dim backdrop still covers the whole viewport at
+     any zoom level. (Ported from vSphere Support Bundle Analyzer.) */
+  function zoomBlock(el){ if(!el) return; el.style.zoom=zoom; el.style.width=(100/zoom)+"%"; el.style.boxSizing="border-box"; }
+  var ZOOM_MODALS=["helpModal"];
+  function applyZoom(){
+    zoomBlock(zContent);
+    var hs=document.getElementsByTagName("header"); if(hs.length) zoomBlock(hs[0]);
+    for(var mi=0;mi<ZOOM_MODALS.length;mi++){ var m=$(ZOOM_MODALS[mi]); if(!m) continue;
+      var cards=m.getElementsByTagName("div");
+      for(var ci=0;ci<cards.length;ci++){ if(/(^|\s)mcard(\s|$)/.test(cards[ci].className+"")){ cards[ci].style.zoom=zoom; break; } } }
+    var p=Math.round(zoom*100)+"%";
     $("fup").title="Larger text ("+p+")"; $("fdown").title="Smaller text ("+p+")"; }
   applyZoom();
+  /* re-assert the zoom-compensated widths on resize/maximise, so full-screening reflows to fill;
+     the header needs it too now that it is zoomed alongside #content. */
+  try{ window.onresize=function(){ try{ zContent.style.width=(100/zoom)+"%";
+    var hr=document.getElementsByTagName("header"); if(hr.length) hr[0].style.width=(100/zoom)+"%"; }catch(er){} }; }catch(eR){}
   $("fup").onclick=function(){ zoom=Math.min(zoom+0.15,2.5); applyZoom(); };
   $("fdown").onclick=function(){ zoom=Math.max(zoom-0.15,0.6); applyZoom(); };
 
@@ -1630,8 +1725,10 @@ function init(){
   $("dto").onchange=function(){ DTO=dayNum(this.value); render(); };
   $("srcSel").onchange=function(){ SRCFILTER=this.value; render(); };
   $("userSel").onchange=function(){ USERFILTER=this.value; render(); };
+  $("zeroRun").onclick=function(){ HIDEZERORUN=!!this.checked; render(); };
   $("clearBtn").onclick=function(){ $("q").value="";$("dfrom").value="";$("dto").value="";$("srcSel").value="";
     QUERY="";DFROM=0;DTO=0;SRCFILTER="";CURCAT="all"; USERFILTER=""; try{ $("userSel").value=""; }catch(ec){}
+    HIDEZERORUN=false; $("zeroRun").checked=false;
     highlightCat(); render(); };
   $("exportBtn").onclick=exportView;
   $("copyBtn").onclick=copyNotes;
@@ -1753,8 +1850,11 @@ function applyCli(cli){ if(!cli.input) return false;
   var fso=new ActiveXObject("Scripting.FileSystemObject");
   applyCaseWindow(cli.from, cli.to);   // case window (UTC): prefill the date filter BEFORE any /auto run — filter only, never scored
   if(/\.csv$/i.test(cli.input) && fso.FileExists(cli.input)){ appendLog("CLI: loading CSV "+cli.input); window.setTimeout(function(){ loadCsvFile(cli.input); },60); return true; }
-  if(fso.FolderExists(cli.input)){ $("inMode").value="d"; $("pfPath").value=cli.input; }
-  else if(fso.FileExists(cli.input)){ $("inMode").value="f"; $("pfPath").value=cli.input; }
+  var lng=isLongPath(cli.input) && !/\.csv$/i.test(cli.input), lk=lng?lpKind(cli.input):"";   // FSO cannot see a 260+ char path: ask its \\?\ form
+  if(fso.FolderExists(cli.input) || lk==="d"){ $("inMode").value="d"; $("pfPath").value=cli.input; }
+  else if(fso.FileExists(cli.input) || lk==="f"){ $("inMode").value="f"; $("pfPath").value=cli.input; }
+  else if(lng){ $("inMode").value=(/\\(SAM|SECURITY|SOFTWARE|SYSTEM|DEFAULT|COMPONENTS|[^\\]+\.(dat|hve))$/i.test(cli.input)?"f":"d"); $("pfPath").value=cli.input;
+    appendLog("CLI: the input path is over MAX_PATH and could not be verified here - treating it as a "+($("inMode").value==="f"?"file":"folder")+"; RECmd reports it if it is really missing."); }
   else { setStatus("CLI input not found: "+cli.input,"err"); appendLog("CLI input not found: "+cli.input); return false; }
   if(cli.outDir){ $("outDir").value=cli.outDir; OUT_TOUCHED=true; hostGuessFrom(cli.outDir); }
   else hostGuessFrom(cli.input);
@@ -1845,6 +1945,7 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
     <ul>
       <li>Three views: <b>Findings</b> (one row per matched key/value, score-ranked), <b>Timeline</b> (same rows by key LastWriteTimestamp) and <b>Categories</b> (grouped per Category → Description with counts and max score — click a group to drill in).</li>
       <li><b>User filter</b>: the <code>user:</code> dropdown (or clicking a User cell) filters every view by the hive's <b>owning user</b>, parsed from <code>HivePath</code>. <code>NTUSER.DAT</code> / <code>UsrClass.dat</code> live under <code>…\Users\&lt;name&gt;\</code> and map to that account; the machine-wide hives (<code>SYSTEM</code>, <code>SOFTWARE</code>, <code>SAM</code>, <code>SECURITY</code>) have no user and group under <code>(machine hives)</code>. It appears only when at least one user hive is present. Two caveats: (1) this is by hive <b>origin</b> — a <code>SAM</code> finding <i>describes</i> user accounts but its hive is machine-level, so it reads as <code>(machine hives)</code>, not per-account; (2) in a multi-host recursive collection the same username across hosts collapses into one entry (there's no host column in registry mode) — disambiguate by source path if needed.</li>
+      <li><b>Hide 0 / blank run count</b>: the checkbox next to the date filter drops rows where a <code>ValueData</code> / <code>ValueData2</code> / <code>ValueData3</code> cell reads <code>Run count: 0</code> or a bare <code>Run count:</code> (UserAssist and similar execution plugins) from every view and from exports. Rows with no run count at all (Taskband, Run keys, services&hellip;) are never hidden. A zero count is not proof a program never ran, so leave it off when hunting for single executions.</li>
       <li>Suspicion scoring R1–R7 (IOC hit, autorun→user-writable path, LOLBin invocation, hijack-prone key, deleted, base64 blob, remote autorun) — rows with score &ge; 3 are shaded. The detail pane shows every column incl. ValueData2/3, Comment and the per-plugin detail CSV path.</li>
       <li>Columns are resizable &mdash; drag a header's right edge; double-click the edge to reset. Widths are remembered per view.</li>
       <li>All timestamps are UTC. The main batch CSV lands in the output root; per-plugin detail CSVs land in a timestamped subfolder.</li>
@@ -1853,5 +1954,53 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
   </div>
 </div>
 
+<script>
+/* ---------- app icon (toolkit icon set) ----------
+   HTA:APPLICATION ICON= is ignored in IE=edge document mode, so the window icon is set at runtime:
+   a hidden, async PowerShell decodes the embedded .ico to %TEMP%, sends WM_SETICON to this mshta's
+   visible windows (title bar + taskbar), then deletes its own script. Cosmetic only - every failure is silent.
+   Self-contained on purpose (own uid, no app helpers) so the same block drops into every family app. */
+var APP_ICON_B64="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";
+function setAppIcon(){
+  try{
+    var fso=new ActiveXObject("Scripting.FileSystemObject");
+    var ps1=fso.GetSpecialFolder(2)+"\\hta_icon_"+(new Date()).getTime()+"_"+Math.floor(Math.random()*1000000)+".ps1";
+    var L=[
+      "$ErrorActionPreference='SilentlyContinue'",
+      "$ico=Join-Path $env:TEMP 'RECmd-Wrapper.ico'",
+      "[IO.File]::WriteAllBytes($ico,[Convert]::FromBase64String('"+APP_ICON_B64+"'))",
+      "$pp=(Get-CimInstance Win32_Process -Filter \"ProcessId=$PID\").ParentProcessId",
+      "Add-Type @'",
+      "using System; using System.Runtime.InteropServices;",
+      "public static class HtaAppIcon {",
+      "  public delegate bool EnumProc(IntPtr h, IntPtr l);",
+      "  [DllImport(\"user32.dll\")] static extern bool EnumWindows(EnumProc p, IntPtr l);",
+      "  [DllImport(\"user32.dll\")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);",
+      "  [DllImport(\"user32.dll\")] static extern bool IsWindowVisible(IntPtr h);",
+      "  [DllImport(\"user32.dll\", CharSet=CharSet.Unicode)] static extern IntPtr LoadImage(IntPtr i, string n, uint t, int cx, int cy, uint f);",
+      "  [DllImport(\"user32.dll\")] static extern int GetSystemMetrics(int i);",
+      "  [DllImport(\"user32.dll\")] static extern IntPtr SendMessage(IntPtr h, int m, IntPtr w, IntPtr l);",
+      "  public static int Apply(uint pid, string ico) {",
+      "    IntPtr sm = LoadImage(IntPtr.Zero, ico, 1, GetSystemMetrics(49), GetSystemMetrics(50), 0x10);",
+      "    IntPtr bg = LoadImage(IntPtr.Zero, ico, 1, GetSystemMetrics(11), GetSystemMetrics(12), 0x10);",
+      "    int n = 0;",
+      "    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p);",
+      "      if (p == pid && IsWindowVisible(h)) { SendMessage(h, 0x80, (IntPtr)0, sm); SendMessage(h, 0x80, (IntPtr)1, bg); n++; }",
+      "      return true; }, IntPtr.Zero);",
+      "    return n;",
+      "  }",
+      "}",
+      "'@",
+      "for($i=0;$i -lt 20;$i++){ if([HtaAppIcon]::Apply([uint32]$pp,$ico) -gt 0){ break }; Start-Sleep -Milliseconds 500 }",
+      "Remove-Item -LiteralPath $PSCommandPath -Force"
+    ];
+    var f=fso.CreateTextFile(ps1,true); f.Write(L.join("\r\n")); f.Close();
+    new ActiveXObject("WScript.Shell").Run('powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+ps1+'"',0,false);
+  }catch(e){}
+}
+/* Started at parse time, not on "load": in some family apps a window load listener never fires after the
+   window.onload property handler. The helper itself waits (up to ~10 s) for the window to become visible. */
+setAppIcon();
+</script>
 </body>
 </html>
