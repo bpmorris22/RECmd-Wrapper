@@ -242,7 +242,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "0.5.0";
+var APP_VERSION = "0.5.1";
 var KNOWN_LATEST_RECMD = "2026.5.0";                                           // EZ site CalVer, verified 2026-07-11 (exe --version still banners SemVer 2.0.0.0)
 var RECMD_ZIP_URL = "https://download.ericzimmermanstools.com/RECmd.zip";      // official EZ mirror (net4; family default — folder-shaped tool)
 var RECMD_PAGE = "https://ericzimmerman.github.io/";                           // for live latest-version lookup
@@ -284,6 +284,12 @@ var SRCFILTER = "";                  // selected source-file filter (generic mod
 var USERFILTER = "";                 // selected user filter (reg mode) — userDisp from HivePath, or "(machine hives)" ("" = all)
 var HIDEZERORUN = false;             // reg mode: drop rows whose "Run count:" cell is 0 or blank (rows with no run count stay)
 var ZERORUN_RE = /^\s*run\s*count\s*:\s*0*\s*$/i;
+var RUNCNT_RE = /^\s*run\s*count\s*:\s*(\d*)\s*$/i;
+/* the "Run count: N" cell (UserAssist & co. put it in ValueData3) as a number; "" when the cell is blank,
+   null when the row carries no run count at all */
+function runCountOf(vd,vd2,vd3){ var a=[vd3,vd2,vd], i, m;
+  for(i=0;i<a.length;i++){ m=String(a[i]==null?"":a[i]).match(RUNCNT_RE); if(m) return m[1]===""?"":parseInt(m[1],10); }
+  return null; }
 var BUSY = false;                    // a RECmd run is in progress
 var PRODUCED = [];                   // CSVs produced by the last run
 var BATCH_TOUCHED = false;           // operator edited the batch-file box — stop auto-filling it
@@ -998,6 +1004,7 @@ function ingestPf(raw, idx, srcLabel){
     rec.vdAllL=(String(vd)+" "+String(vd2)+" "+String(vd3)).toLowerCase();
     rec.userDisp=userFromHive(rec.hive);   // owning user (NTUSER/UsrClass) or "(machine hives)"
     rec.zeroRun=ZERORUN_RE.test(String(vd))||ZERORUN_RE.test(String(vd2))||ZERORUN_RE.test(String(vd3));   // "Run count: 0" / "Run count:" (blank)
+    rec.runCnt=runCountOf(vd,vd2,vd3);   // number, "" (blank) or null (no run count) - shown in the Run count column
     rec.blob=(rec.name+" "+kp+" "+vn+" "+vd+" "+vd2+" "+vd3+" "+rec.hive+" "+rec.hiveType+" "+rec.cat+" "+desc+" "+rec.comment).toLowerCase();
     if(rec.hive) hives[rec.hive.toLowerCase()]=1;
     ROWS.push(rec);
@@ -1128,16 +1135,22 @@ function hasTag(r,t){ for(var i=0;i<r.tags.length;i++){ if(r.tags[i]===t) return
 
 /* ---------- findings table ---------- */
 function clip(s,n){ s=String(s==null?"":s); return s.length>n?(s.substring(0,n)+"…"):s; }
+/* shared column builders - Findings and Timeline order them differently */
+var COL_USER={h:"User", sk:function(r){return String(r.userDisp).toLowerCase();}, cell:function(r){return '<td class="mono muted lnk" data-user="'+esc(r.userDisp)+'" title="Hive owner (from HivePath) — click to filter. '+esc(r.userDisp)+'">'+esc(r.userDisp)+'</td>';}};
+var COL_LASTW={h:"LastWrite (UTC)", sk:function(r){return r.ms;}, cell:function(r){return '<td class="mono">'+esc(fmtShortTs(r.lastWrite))+'</td>';}};
+var COL_RUNCNT={h:"Run count", sk:function(r){return (typeof r.runCnt==="number")?r.runCnt:-1;},
+  cell:function(r){ var v=r.runCnt; return '<td class="mono" style="text-align:right" title="'+(v===null?"No run count on this row":(v===""?"Run count: (blank)":"Run count: "+v))+'">'+(typeof v==="number"?v:"")+'</td>';}};
 var COLS=[
   {h:"Tags", sk:function(r){return -r.score;}, cell:function(r){return '<td class="first">'+tagHtml(r)+'</td>';}},
+  COL_USER,
+  COL_LASTW,
   {h:"Category", sk:function(r){return r.catL;}, cell:function(r){return '<td class="lnk" data-q="'+esc(r.cat)+'" title="'+esc(r.cat)+'">'+esc(r.cat)+'</td>';}},
   {h:"Description", sk:function(r){return r.descL;}, cell:function(r){return '<td class="lnk" data-q="'+esc(r.desc)+'" title="'+esc(r.desc)+'">'+esc(r.desc)+'</td>';}},
   {h:"KeyPath", sk:function(r){return r.keyL;}, cell:function(r){return '<td class="mono" title="'+esc(r.keyPath)+'">'+esc(shortPathN(r.keyPath,4))+'</td>';}},
   {h:"ValueName", sk:function(r){return r.vnL;}, cell:function(r){return '<td class="mono" title="'+esc(r.valueName)+'">'+esc(r.valueName)+'</td>';}},
   {h:"ValueData", sk:function(r){return r.vdAllL;}, cell:function(r){return '<td class="mono" title="'+esc(clip(r.vd,500))+'">'+esc(clip(r.vd,220))+'</td>';}},
-  {h:"LastWrite (UTC)", sk:function(r){return r.ms;}, cell:function(r){return '<td class="mono">'+esc(fmtShortTs(r.lastWrite))+'</td>';}},
-  {h:"Hive", sk:function(r){return String(r.hiveType).toLowerCase();}, cell:function(r){return '<td class="mono muted" title="'+esc(r.hive)+'">'+esc(r.hiveType)+'</td>';}},
-  {h:"User", sk:function(r){return String(r.userDisp).toLowerCase();}, cell:function(r){return '<td class="mono muted lnk" data-user="'+esc(r.userDisp)+'" title="Hive owner (from HivePath) — click to filter. '+esc(r.userDisp)+'">'+esc(r.userDisp)+'</td>';}}
+  COL_RUNCNT,
+  {h:"Hive", sk:function(r){return String(r.hiveType).toLowerCase();}, cell:function(r){return '<td class="mono muted" title="'+esc(r.hive)+'">'+esc(r.hiveType)+'</td>';}}
 ];
 function tagHtml(r){
   var t="",i;
@@ -1327,14 +1340,15 @@ function gripReset(e){
 
 /* ---------- timeline view (same findings sorted by key LastWriteTimestamp) ---------- */
 var TCOLS=[
-  {h:"LastWrite (UTC)", sk:function(r){return r.ms;}, cell:function(r){return '<td class="mono">'+esc(fmtShortTs(r.lastWrite))+'</td>';}},
+  COL_LASTW,
   {h:"Tags", sk:function(r){return -r.score;}, cell:function(r){return '<td class="first">'+tagHtml(r)+'</td>';}},
+  COL_USER,
   {h:"Category", sk:function(r){return r.catL;}, cell:function(r){return '<td class="lnk" data-q="'+esc(r.cat)+'" title="'+esc(r.cat)+'">'+esc(r.cat)+'</td>';}},
   {h:"Description", sk:function(r){return r.descL;}, cell:function(r){return '<td class="lnk" data-q="'+esc(r.desc)+'" title="'+esc(r.desc)+'">'+esc(r.desc)+'</td>';}},
   {h:"KeyPath", sk:function(r){return r.keyL;}, cell:function(r){return '<td class="mono" title="'+esc(r.keyPath)+'">'+esc(shortPathN(r.keyPath,4))+'</td>';}},
   {h:"ValueName", sk:function(r){return r.vnL;}, cell:function(r){return '<td class="mono" title="'+esc(r.valueName)+'">'+esc(r.valueName)+'</td>';}},
   {h:"ValueData", sk:function(r){return r.vdAllL;}, cell:function(r){return '<td class="mono" title="'+esc(clip(r.vd,500))+'">'+esc(clip(r.vd,220))+'</td>';}},
-  {h:"User", sk:function(r){return String(r.userDisp).toLowerCase();}, cell:function(r){return '<td class="mono muted lnk" data-user="'+esc(r.userDisp)+'" title="Hive owner (from HivePath) — click to filter. '+esc(r.userDisp)+'">'+esc(r.userDisp)+'</td>';}}
+  COL_RUNCNT
 ];
 function renderTime(){
   if(!ROWS.length) return;
@@ -1566,12 +1580,12 @@ function exportView(){
   if(VIEW==="cat"){ exportCats(); return; }
   var rows=window.__viewRows||[];
   if(!rows.length){ setStatus("Nothing to export","err"); return; }
-  var head=["Name","Category","Description","KeyPath","ValueName","ValueType","ValueData","ValueData2","ValueData3","Comment","Tags","Score","Suspicious","Recursive","Deleted","LastWrite_UTC","HivePath","HiveType","User","PluginDetailFile"];
+  var head=["Name","Category","Description","KeyPath","ValueName","ValueType","ValueData","ValueData2","ValueData3","Comment","Tags","Score","Suspicious","Recursive","Deleted","LastWrite_UTC","HivePath","HiveType","User","PluginDetailFile","RunCount"];
   var lines=[head.join(",")];
   for(var i=0;i<rows.length;i++){ var r=rows[i];
     lines.push([cq(r.name),cq(r.cat),cq(r.desc),cq(r.keyPath),cq(r.valueName),cq(r.valueType),cq(r.vd),cq(r.vd2),cq(r.vd3),
       cq(r.comment),cq(r.tags.join("; ")),cq(r.score),cq(r.sus?"Yes":"No"),cq(r.recursive?"True":"False"),
-      cq(r.deleted?"True":"False"),cq(r.lastWrite),cq(r.hive),cq(r.hiveType),cq(r.userDisp),cq(r.plugin)].join(",")); }
+      cq(r.deleted?"True":"False"),cq(r.lastWrite),cq(r.hive),cq(r.hiveType),cq(r.userDisp),cq(r.plugin),cq(typeof r.runCnt==="number"?r.runCnt:"")].join(",")); }
   var dir=LASTOUTDIR||trimStr($("outDir").value)||LOADED_CSV_DIR;
   if(!dir){ setStatus("No output folder to write to — set an output directory, process a hive, or load a CSV first.","err"); return; }
   var path=dir+"\\"+((VIEW==="time")?"timeline_export_":"filtered_export_")+nowStamp()+".csv";
@@ -1945,6 +1959,7 @@ window.onload=function(){ init(); try{ window.setTimeout(checkSelfUpdate,600); }
     <ul>
       <li>Three views: <b>Findings</b> (one row per matched key/value, score-ranked), <b>Timeline</b> (same rows by key LastWriteTimestamp) and <b>Categories</b> (grouped per Category → Description with counts and max score — click a group to drill in).</li>
       <li><b>User filter</b>: the <code>user:</code> dropdown (or clicking a User cell) filters every view by the hive's <b>owning user</b>, parsed from <code>HivePath</code>. <code>NTUSER.DAT</code> / <code>UsrClass.dat</code> live under <code>…\Users\&lt;name&gt;\</code> and map to that account; the machine-wide hives (<code>SYSTEM</code>, <code>SOFTWARE</code>, <code>SAM</code>, <code>SECURITY</code>) have no user and group under <code>(machine hives)</code>. It appears only when at least one user hive is present. Two caveats: (1) this is by hive <b>origin</b> — a <code>SAM</code> finding <i>describes</i> user accounts but its hive is machine-level, so it reads as <code>(machine hives)</code>, not per-account; (2) in a multi-host recursive collection the same username across hosts collapses into one entry (there's no host column in registry mode) — disambiguate by source path if needed.</li>
+      <li><b>Run count</b> column (Findings and Timeline, right of ValueData): the number from a row's <code>Run count: N</code> cell, sortable; empty when the row has no run count. Exports carry it as <code>RunCount</code>.</li>
       <li><b>Hide 0 / blank run count</b>: the checkbox next to the date filter drops rows where a <code>ValueData</code> / <code>ValueData2</code> / <code>ValueData3</code> cell reads <code>Run count: 0</code> or a bare <code>Run count:</code> (UserAssist and similar execution plugins) from every view and from exports. Rows with no run count at all (Taskband, Run keys, services&hellip;) are never hidden. A zero count is not proof a program never ran, so leave it off when hunting for single executions.</li>
       <li>Suspicion scoring R1–R7 (IOC hit, autorun→user-writable path, LOLBin invocation, hijack-prone key, deleted, base64 blob, remote autorun) — rows with score &ge; 3 are shaded. The detail pane shows every column incl. ValueData2/3, Comment and the per-plugin detail CSV path.</li>
       <li>Columns are resizable &mdash; drag a header's right edge; double-click the edge to reset. Widths are remembered per view.</li>
